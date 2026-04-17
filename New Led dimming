@@ -8,14 +8,11 @@ const int btnUp = 2;
 const int btnDown = 3;
 const int btnSelect = 4;
 
-// LCD address (သင့် I2C address အတိုင်း ထည့်ပါ)
 LiquidCrystal_I2C lcd(0x3F, 16, 2);
 
-// Modes
 enum AppMode { MANUAL, TIMER_SETUP, TIMER_RUNNING };
 AppMode currentMode = MANUAL;
 
-// Timer variables
 unsigned long timerEndMillis = 0;
 int setHours = 0, setMinutes = 1;
 int remainingSeconds = 0;
@@ -24,15 +21,15 @@ int currentDigitIndex = 0;
 unsigned long lastBlinkTime = 0;
 bool showCursor = true;
 
-// Debouncing
 unsigned long lastDebounceTime = 0;
 const int debounceDelay = 50;
 bool lastUpState = HIGH, lastDownState = HIGH, lastSelectState = HIGH;
 int lastPotValue = -1;
 
-// LCD update rate limiting
+// LCD update control
 unsigned long lastLcdUpdate = 0;
-const int lcdUpdateInterval = 200; // ms
+const int lcdUpdateInterval = 500; // 500ms
+int lastDisplayBrightness = -1;    // Manual mode အတွက်
 
 void setup() {
   pinMode(ledPin, OUTPUT);
@@ -44,12 +41,11 @@ void setup() {
   lcd.backlight();
   lcd.noCursor();
   lcd.clear();
-  lcd.setCursor(0, 0);
   lcd.print("LED Timer Dimmer");
-  lcd.setCursor(0, 1);
+  lcd.setCursor(0,1);
   lcd.print("v2.0");
   delay(2000);
-  updateLCD();
+  updateLCD(); // initial update
 }
 
 void loop() {
@@ -61,10 +57,15 @@ void loop() {
     case TIMER_RUNNING: handleTimerRunning(); break;
   }
   
-  // LCD ကို 200ms တစ်ခါမှသာ update လုပ်ပါ
-  if (millis() - lastLcdUpdate >= lcdUpdateInterval) {
-    lastLcdUpdate = millis();
-    updateLCD();
+  // Timer mode များအတွက်သာ periodic update လုပ်ပါ
+  if (currentMode != MANUAL) {
+    if (millis() - lastLcdUpdate >= lcdUpdateInterval) {
+      lastLcdUpdate = millis();
+      updateLCD();
+    }
+  } else {
+    // Manual mode အတွက် update ကို brightness ပြောင်းမှသာ လုပ်မယ် (အောက်က updateLCD ထဲမှာ)
+    updateLCD(); // ဒါပေမဲ့ ဒီ updateLCD က brightness ပြောင်းမှသာ print လုပ်မယ်
   }
 }
 
@@ -87,6 +88,7 @@ void readButtons() {
       digits[2] = setMinutes/10; digits[3] = setMinutes%10;
       lastBlinkTime = millis();
       showCursor = true;
+      lastLcdUpdate = 0; // force immediate update
     } 
     else if (currentMode == TIMER_SETUP) {
       if (currentDigitIndex < 3) currentDigitIndex++;
@@ -104,18 +106,22 @@ void readButtons() {
     else if (currentMode == TIMER_RUNNING) {
       currentMode = MANUAL;
       analogWrite(ledPin, map(analogRead(potPin),0,1023,0,255));
+      lastDisplayBrightness = -1; // force update on next manual loop
     }
     lastDebounceTime = now;
+    updateLCD(); // immediate refresh after mode change
   }
   
   if (up == LOW && lastUpState == HIGH && currentMode == TIMER_SETUP) {
     incrementDigit(true);
     lastDebounceTime = now;
+    updateLCD();
   }
   
   if (down == LOW && lastDownState == HIGH && currentMode == TIMER_SETUP) {
     incrementDigit(false);
     lastDebounceTime = now;
+    updateLCD();
   }
   
   lastUpState = up; lastDownState = down; lastSelectState = sel;
@@ -142,6 +148,8 @@ void handleManualMode() {
   if(abs(pot - lastPotValue) > 2){
     analogWrite(ledPin, map(pot,0,1023,0,255));
     lastPotValue = pot;
+    // LCD ကို ချက်ချင်း update လုပ်မယ် (ဒါပေမဲ့ brightness ပြောင်းမှသာ print လုပ်မယ်)
+    updateLCD();
   }
 }
 
@@ -163,6 +171,7 @@ void handleTimerRunning() {
   if(millis() >= timerEndMillis){
     analogWrite(ledPin, 0);
     currentMode = MANUAL;
+    lastDisplayBrightness = -1;
   } else {
     remainingSeconds = (timerEndMillis - millis())/1000;
     analogWrite(ledPin, 255);
@@ -172,13 +181,18 @@ void handleTimerRunning() {
 void updateLCD() {
   switch(currentMode){
     case MANUAL:
-      lcd.setCursor(0, 0);
-      lcd.print("Manual Mode     ");
-      lcd.setCursor(0, 1);
-      int bright = map(analogRead(potPin), 0, 1023, 0, 100);
-      lcd.print("Bright: ");
-      lcd.print(bright);
-      lcd.print("%     ");
+      {
+        int bright = map(analogRead(potPin), 0, 1023, 0, 100);
+        if(bright != lastDisplayBrightness) {
+          lastDisplayBrightness = bright;
+          lcd.setCursor(0, 0);
+          lcd.print("Manual Mode     ");
+          lcd.setCursor(0, 1);
+          lcd.print("Bright: ");
+          lcd.print(bright);
+          lcd.print("%     ");
+        }
+      }
       break;
       
     case TIMER_SETUP:
