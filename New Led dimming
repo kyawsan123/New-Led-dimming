@@ -108,13 +108,13 @@ void main(void) {
 void setup(void) {
     ANSEL = 0; ANSELH = 0; // All Digital I/O
     
-    TRISA = 0x0F; // RA0-RA3 Inputs, RA4-RA5 Outputs (Digit Control pins)
-    TRISB = 0x00; // PORTB Outputs (7-Segment Data lines A-G)
-    TRISC = 0x00; // PORTC Outputs (RC0, RC1 = Digits / RC2 = PWM / RC3,4,5 = Indicators)
+    TRISA = 0x0F; // RA0-RA3 Inputs, RA4-RA5 Outputs
+    TRISB = 0x00; // PORTB Outputs (Segment Lines A-G + DP/Colon)
+    TRISC = 0x00; // PORTC Outputs 
     
     PORTB = 0x00;
     
-    // ကနဦးအခြေအနေတွင် Digit Control အားလုံးကို HIGH ပေးပြီး Display ခေတ္တပိတ်ထားမည်
+    // Control pins အားလုံးကို HIGH ပေးပြီး အစပိုင်းတွင် Display ခေတ္တပိတ်ထားမည်
     PORTA |= 0x30; // RA4, RA5 = 1
     PORTC |= 0x03; // RC0, RC1 = 1
     
@@ -144,7 +144,7 @@ void update_system_outputs(void) {
     }
 }
 
-// 5463AS-1 Hardware Internal Wiring အတွက် Logic အမှန် ပြင်ဆင်ထားသော စနစ်
+// အလယ်က ( : ) စက် ပေါ်စေရန် ပြင်ဆင်ထားသော Function
 void display_process(void) {
     if (!pwr_status) {
         PORTB = 0x00;
@@ -169,12 +169,17 @@ void display_process(void) {
             PORTB = segment_code[digits[i]]; 
         }
         
-        // 5463AS-1 display ၏ ခြေထောက်များနှင့် ကိုက်ညီအောင် လှည့်ပတ်မောင်းနှင်ခြင်း
-        // i=0 (Digit 1), i=1 (Digit 2), i=2 (Digit 3), i=3 (Digit 4)
-        if(i == 0)      RC0 = 0; // PIC Pin RC0 -> ချိတ်ရမည်မှာ Display Pin 12 (Digit 1)
-        else if(i == 1) RC1 = 0; // PIC Pin RC1 -> ချိတ်ရမည်မှာ Display Pin 9  (Digit 2)
-        else if(i == 2) RA4 = 0; // PIC Pin RA4 -> ချိတ်ရမည်မှာ Display Pin 8  (Digit 3)
-        else            RA5 = 0; // PIC Pin RA5 -> ချိတ်ရမည်မှာ Display Pin 6  (Digit 4)
+        // အလယ်က Colon ( : ) စက် ပေါ်စေရန်အတွက် Logic ဖြည့်စွက်ခြင်း
+        // 5463AS-1 ၏ wiring အရ Digit 2 (i=1) ပွင့်ချိန်တွင် RB7 (DP Pin) ကိုပါ တွဲဖွင့်ပေးရပါမည်
+        if (i == 1) {
+            PORTB |= 0x80; // RB7 (Pin 28) ကို HIGH ပေးပြီး Colon စက်ကို ဖွင့်ခြင်း
+        }
+        
+        // 5463AS-1 Display Pins Drive Configuration
+        if(i == 0)      RC0 = 0; // Digit 1 -> Display Pin 12
+        else if(i == 1) RC1 = 0; // Digit 2 -> Display Pin 9
+        else if(i == 2) RA4 = 0; // Digit 3 -> Display Pin 8
+        else            RA5 = 0; // Digit 4 -> Display Pin 6
         
         __delay_ms(1); 
     }
