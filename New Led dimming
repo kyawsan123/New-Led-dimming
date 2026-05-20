@@ -1,16 +1,16 @@
 #include <xc.h>
 
 // Configuration Bits
-#pragma config FOSC = INTRC_NOCLKOUT // Internal Oscillator
-#pragma config WDTE = OFF            // Watchdog Timer OFF
-#pragma config PWRTE = OFF           // Power-up Timer OFF
-#pragma config MCLRE = ON            // MCLR Pin Enabled (Pin 1 ကို 5V ပေးရမည်)
-#pragma config CP = OFF              // Code Protection OFF
-#pragma config CPD = OFF             // Data Code Protection OFF
-#pragma config BOREN = OFF           // Brown Out Reset OFF
-#pragma config IESO = OFF            // Internal External Switchover OFF
-#pragma config FCMEN = OFF           // Fail-Safe Clock Monitor OFF
-#pragma config LVP = OFF             // Low Voltage Programming OFF
+#pragma config FOSC = INTRC_NOCLKOUT 
+#pragma config WDTE = OFF            
+#pragma config PWRTE = OFF           
+#pragma config MCLRE = ON            
+#pragma config CP = OFF              
+#pragma config CPD = OFF             
+#pragma config BOREN = OFF           
+#pragma config IESO = OFF            
+#pragma config FCMEN = OFF           
+#pragma config LVP = OFF             
 
 #define _XTAL_FREQ 4000000 // 4MHz
 
@@ -26,7 +26,13 @@ volatile unsigned int seconds_counter = 0;
 unsigned char pwr_status = 0; 
 unsigned char dim_level = 0; 
 
-// Common Cathode 7-Segment Codes (0-9)
+// Button State Flags (ခလုတ်ကို တစ်ချက်နှိပ်ရင် တစ်ခါပဲအလုပ်လုပ်စေရန်)
+unsigned char btn_pwr_pressed = 0;
+unsigned char btn_dim_pressed = 0;
+unsigned char btn_up_pressed = 0;
+unsigned char btn_dn_pressed = 0;
+
+// Common Cathode 7-Segment Codes
 unsigned char segment_code[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
 
 void setup(void);
@@ -36,15 +42,15 @@ void display_process(void);
 // Timer1 Interrupt (100ms interval)
 void __interrupt() isr(void) {
     if (TMR1IF) {
-        TMR1H = 0x0B; TMR1L = 0xDC; // Reload for 100ms
+        TMR1H = 0x0B; TMR1L = 0xDC; // Reload
         
         if (pwr_status && timer_minutes > 0) {
             seconds_counter++;
-            if (seconds_counter >= 600) { // 60 seconds (1 minute)
+            if (seconds_counter >= 600) { 
                 timer_minutes--;
                 seconds_counter = 0;
                 if (timer_minutes == 0) {
-                    pwr_status = 0; // အချိန်ပြည့်လျှင် ပိတ်မည်
+                    pwr_status = 0; 
                 }
             }
         }
@@ -56,81 +62,100 @@ void main(void) {
     setup();
     
     while(1) {
-        // 1. Power On/Off Logic
+        // -------------------------------------------------------------
+        // ၁။ Power On/Off Button Logic (Flicker-Free)
+        // -------------------------------------------------------------
         if (BTN_POWER == 0) {
-            __delay_ms(40);
-            if (BTN_POWER == 0) {
+            if (btn_pwr_pressed == 0) { // ကနဦး နှိပ်လိုက်တဲ့အချိန် သီးသန့်
                 pwr_status = !pwr_status;
                 if (pwr_status) {
                     dim_level = 0;       
-                    timer_minutes = 0;   // အစပိုင်းတွင် Timer မသုံးသေးပါ (--:-- ပြရန်)
+                    timer_minutes = 0;   
                 }
-                while(!BTN_POWER) display_process();
+                btn_pwr_pressed = 1; // ခလုတ်ပြန်မလွှတ်မချင်း ထပ်မလုပ်စေရန် Block ထားမည်
             }
+        } else {
+            btn_pwr_pressed = 0; // ခလုတ်လွှတ်လိုက်မှ အလံပြန်ချမည်
         }
 
         if (pwr_status) {
-            // 2. Dimming Logic
+            // -------------------------------------------------------------
+            // ၂။ Dimming Button Logic (အဓိက ပြင်ဆင်ထားသောနေရာ - လုံးဝမတုန်တော့ပါ)
+            // -------------------------------------------------------------
             if (BTN_DIM == 0) {
-                __delay_ms(40);
-                if (BTN_DIM == 0) {
+                if (btn_dim_pressed == 0) {
                     dim_level++;
                     if (dim_level > 2) dim_level = 0;
-                    while(!BTN_DIM) display_process();
+                    update_system_outputs(); // နှိပ်လိုက်တာနဲ့ output ကို ချက်ချင်းပြောင်း
+                    btn_dim_pressed = 1; 
                 }
+            } else {
+                btn_dim_pressed = 0; 
             }
 
-            // 3. Timer Up Button Logic
+            // -------------------------------------------------------------
+            // ၃။ Timer Up Button Logic (Flicker-Free)
+            // -------------------------------------------------------------
             if (BTN_UP == 0) {
-                __delay_ms(40);
-                if (timer_minutes < 180) timer_minutes += 5;
-                seconds_counter = 0;
-                while(!BTN_UP) display_process();
+                if (btn_up_pressed == 0) {
+                    if (timer_minutes < 180) timer_minutes += 5;
+                    seconds_counter = 0;
+                    btn_up_pressed = 1;
+                }
+            } else {
+                btn_up_pressed = 0;
             }
 
-            // 4. Timer Down Button Logic
+            // -------------------------------------------------------------
+            // ၄။ Timer Down Button Logic (Flicker-Free)
+            // -------------------------------------------------------------
             if (BTN_DOWN == 0) {
-                __delay_ms(40);
-                if (timer_minutes >= 5) timer_minutes -= 5;
-                while(!BTN_DOWN) display_process();
+                if (btn_dn_pressed == 0) {
+                    if (timer_minutes >= 5) timer_minutes -= 5;
+                    btn_dn_pressed = 1;
+                }
+            } else {
+                btn_dn_pressed = 0;
             }
             
-            update_system_outputs(); 
         } else {
             CCPR1L = 0;
             PORTC &= 0x07; 
         }
 
+        // ဘာပဲဖြစ်ဖြစ် ဒီ display_process() က loop ပတ်တိုင်း တားဆီးမှုမရှိ အမြဲ run နေမည်
         display_process(); 
     }
 }
 
 void setup(void) {
-    ANSEL = 0; ANSELH = 0; // All Digital I/O
+    ANSEL = 0; ANSELH = 0; 
     
-    TRISA = 0x0F; // RA0-RA3 Inputs, RA4-RA5 Outputs
-    TRISB = 0x00; // PORTB Outputs (Segment Lines A-G + DP/Colon)
-    TRISC = 0x00; // PORTC Outputs 
+    TRISA = 0x0F; 
+    TRISB = 0x00; 
+    TRISC = 0x00; 
     
     PORTB = 0x00;
-    
-    // Control pins အားလုံးကို HIGH ပေးပြီး အစပိုင်းတွင် Display ခေတ္တပိတ်ထားမည်
-    PORTA |= 0x30; // RA4, RA5 = 1
-    PORTC |= 0x03; // RC0, RC1 = 1
+    PORTA |= 0x30; 
+    PORTC |= 0x03; 
     
     // PWM Config
     T2CON = 0x04;  
     PR2 = 255;     
     CCP1CON = 0x0C;
     
-    // Timer1 Config (100ms)
+    // Timer1 Config
     T1CON = 0x11;  
     TMR1H = 0x0B;  
     TMR1L = 0xDC;
     TMR1IE = 1; GIE = 1; PEIE = 1;
+    
+    update_system_outputs();
 }
 
 void update_system_outputs(void) {
+    if (!pwr_status) return;
+    
     PORTC &= 0x07; 
     if (dim_level == 0) { 
         CCPR1L = 50;        
@@ -144,7 +169,6 @@ void update_system_outputs(void) {
     }
 }
 
-// အလယ်က ( : ) စက် ပေါ်စေရန် ပြင်ဆင်ထားသော Function
 void display_process(void) {
     if (!pwr_status) {
         PORTB = 0x00;
@@ -158,29 +182,28 @@ void display_process(void) {
     int digits[4] = {hrs/10, hrs%10, mins/10, mins%10};
 
     for(int i=0; i<4; i++) {
-        // All Digits OFF 
         PORTA |= 0x30; 
         PORTC |= 0x03; 
+        PORTB = 0x00; 
 
-        // Segment Data Output 
         if (timer_minutes == 0) {
-            PORTB = 0x40; // Dash '-' ပြမည်
+            PORTB = 0x40; 
         } else {
             PORTB = segment_code[digits[i]]; 
         }
         
-        // အလယ်က Colon ( : ) စက် ပေါ်စေရန်အတွက် Logic ဖြည့်စွက်ခြင်း
-        // 5463AS-1 ၏ wiring အရ Digit 2 (i=1) ပွင့်ချိန်တွင် RB7 (DP Pin) ကိုပါ တွဲဖွင့်ပေးရပါမည်
         if (i == 1) {
-            PORTB |= 0x80; // RB7 (Pin 28) ကို HIGH ပေးပြီး Colon စက်ကို ဖွင့်ခြင်း
+            PORTB |= 0x80; 
         }
         
-        // 5463AS-1 Display Pins Drive Configuration
-        if(i == 0)      RC0 = 0; // Digit 1 -> Display Pin 12
-        else if(i == 1) RC1 = 0; // Digit 2 -> Display Pin 9
-        else if(i == 2) RA4 = 0; // Digit 3 -> Display Pin 8
-        else            RA5 = 0; // Digit 4 -> Display Pin 6
+        if(i == 0)      RC0 = 0; 
+        else if(i == 1) RC1 = 0; 
+        else if(i == 2) RA4 = 0; 
+        else            RA5 = 0; 
         
-        __delay_ms(1); 
+        __delay_ms(1); // Refresh Rate ပိုမြန်အောင် 1ms သို့ လျှော့ချထားသည်
     }
+    
+    PORTA |= 0x30; 
+    PORTC |= 0x03; 
 }
