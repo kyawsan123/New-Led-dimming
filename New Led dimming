@@ -1,222 +1,181 @@
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
+#include <xc.h>
 
-// Pin definitions
-const int ledPin = 9;
-const int potPin = A0;
-const int btnUp = 2;
-const int btnDown = 3;
-const int btnSelect = 4;
+// Configuration Bits
+#pragma config FOSC = INTRC_NOCLKOUT // Internal Oscillator
+#pragma config WDTE = OFF            // Watchdog Timer OFF
+#pragma config PWRTE = OFF           // Power-up Timer OFF
+#pragma config MCLRE = ON            // MCLR Pin Enabled (Pin 1 ကို 5V ပေးရမည်)
+#pragma config CP = OFF              // Code Protection OFF
+#pragma config CPD = OFF             // Data Code Protection OFF
+#pragma config BOREN = OFF           // Brown Out Reset OFF
+#pragma config IESO = OFF            // Internal External Switchover OFF
+#pragma config FCMEN = OFF           // Fail-Safe Clock Monitor OFF
+#pragma config LVP = OFF             // Low Voltage Programming OFF
 
-LiquidCrystal_I2C lcd(0x3F, 16, 2);
+#define _XTAL_FREQ 4000000 // 4MHz
 
-enum AppMode { MANUAL, TIMER_SETUP, TIMER_RUNNING };
-AppMode currentMode = MANUAL;
+// Buttons Input Mapping
+#define BTN_POWER    RA0
+#define BTN_DIM      RA1
+#define BTN_UP       RA2
+#define BTN_DOWN     RA3
 
-unsigned long timerEndMillis = 0;
-int setHours = 0, setMinutes = 1;
-int remainingSeconds = 0;
-int digits[4] = {0, 0, 0, 1};
-int currentDigitIndex = 0;
-unsigned long lastBlinkTime = 0;
-bool showCursor = true;
+// Global Variables
+volatile unsigned int timer_minutes = 0;
+volatile unsigned int seconds_counter = 0;
+unsigned char pwr_status = 0; 
+unsigned char dim_level = 0; 
 
-unsigned long lastDebounceTime = 0;
-const int debounceDelay = 50;
-bool lastUpState = HIGH, lastDownState = HIGH, lastSelectState = HIGH;
-int lastPotValue = -1;
+// Common Cathode 7-Segment Codes (0-9)
+unsigned char segment_code[] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
 
-// LCD update control
-unsigned long lastLcdUpdate = 0;
-const int lcdUpdateInterval = 500; // 500ms
-int lastDisplayBrightness = -1;    // Manual mode အတွက်
+void setup(void);
+void update_system_outputs(void);
+void display_process(void);
 
-void setup() {
-  pinMode(ledPin, OUTPUT);
-  pinMode(btnUp, INPUT_PULLUP);
-  pinMode(btnDown, INPUT_PULLUP);
-  pinMode(btnSelect, INPUT_PULLUP);
-  
-  lcd.init();
-  lcd.backlight();
-  lcd.noCursor();
-  lcd.clear();
-  lcd.print("LED Timer Dimmer");
-  lcd.setCursor(0,1);
-  lcd.print("v2.0");
-  delay(2000);
-  updateLCD(); // initial update
-}
-
-void loop() {
-  readButtons();
-  
-  switch (currentMode) {
-    case MANUAL: handleManualMode(); break;
-    case TIMER_SETUP: handleTimerSetup(); break;
-    case TIMER_RUNNING: handleTimerRunning(); break;
-  }
-  
-  // Timer mode များအတွက်သာ periodic update လုပ်ပါ
-  if (currentMode != MANUAL) {
-    if (millis() - lastLcdUpdate >= lcdUpdateInterval) {
-      lastLcdUpdate = millis();
-      updateLCD();
-    }
-  } else {
-    // Manual mode အတွက် update ကို brightness ပြောင်းမှသာ လုပ်မယ် (အောက်က updateLCD ထဲမှာ)
-    updateLCD(); // ဒါပေမဲ့ ဒီ updateLCD က brightness ပြောင်းမှသာ print လုပ်မယ်
-  }
-}
-
-void readButtons() {
-  bool up = digitalRead(btnUp);
-  bool down = digitalRead(btnDown);
-  bool sel = digitalRead(btnSelect);
-  unsigned long now = millis();
-  
-  if (now - lastDebounceTime < debounceDelay) {
-    lastUpState = up; lastDownState = down; lastSelectState = sel;
-    return;
-  }
-  
-  if (sel == LOW && lastSelectState == HIGH) {
-    if (currentMode == MANUAL) {
-      currentMode = TIMER_SETUP;
-      currentDigitIndex = 0;
-      digits[0] = setHours/10; digits[1] = setHours%10;
-      digits[2] = setMinutes/10; digits[3] = setMinutes%10;
-      lastBlinkTime = millis();
-      showCursor = true;
-      lastLcdUpdate = 0; // force immediate update
-    } 
-    else if (currentMode == TIMER_SETUP) {
-      if (currentDigitIndex < 3) currentDigitIndex++;
-      else {
-        setHours = digits[0]*10 + digits[1];
-        setMinutes = digits[2]*10 + digits[3];
-        if (setHours==0 && setMinutes==0) setMinutes=1;
-        unsigned long duration = ((unsigned long)setHours*3600 + setMinutes*60)*1000;
-        timerEndMillis = millis() + duration;
-        currentMode = TIMER_RUNNING;
-        analogWrite(ledPin, 255);
-        lcd.noCursor();
-      }
-    }
-    else if (currentMode == TIMER_RUNNING) {
-      currentMode = MANUAL;
-      analogWrite(ledPin, map(analogRead(potPin),0,1023,0,255));
-      lastDisplayBrightness = -1; // force update on next manual loop
-    }
-    lastDebounceTime = now;
-    updateLCD(); // immediate refresh after mode change
-  }
-  
-  if (up == LOW && lastUpState == HIGH && currentMode == TIMER_SETUP) {
-    incrementDigit(true);
-    lastDebounceTime = now;
-    updateLCD();
-  }
-  
-  if (down == LOW && lastDownState == HIGH && currentMode == TIMER_SETUP) {
-    incrementDigit(false);
-    lastDebounceTime = now;
-    updateLCD();
-  }
-  
-  lastUpState = up; lastDownState = down; lastSelectState = sel;
-}
-
-void incrementDigit(bool up) {
-  int val = digits[currentDigitIndex];
-  if(up) val++; else val--;
-  switch(currentDigitIndex){
-    case 0: val = constrain(val,0,2); break;
-    case 1: val = (digits[0]==2) ? constrain(val,0,3) : constrain(val,0,9); break;
-    case 2: val = constrain(val,0,5); break;
-    case 3: val = constrain(val,0,9); break;
-  }
-  digits[currentDigitIndex] = val;
-  setHours = digits[0]*10+digits[1];
-  setMinutes = digits[2]*10+digits[3];
-  if(setHours>23) setHours=23;
-  if(setMinutes>59) setMinutes=59;
-}
-
-void handleManualMode() {
-  int pot = analogRead(potPin);
-  if(abs(pot - lastPotValue) > 2){
-    analogWrite(ledPin, map(pot,0,1023,0,255));
-    lastPotValue = pot;
-    // LCD ကို ချက်ချင်း update လုပ်မယ် (ဒါပေမဲ့ brightness ပြောင်းမှသာ print လုပ်မယ်)
-    updateLCD();
-  }
-}
-
-void handleTimerSetup() {
-  if(millis() - lastBlinkTime > 500){
-    showCursor = !showCursor;
-    lastBlinkTime = millis();
-  }
-  if(showCursor){
-    int col = (currentDigitIndex < 2) ? currentDigitIndex : currentDigitIndex+1;
-    lcd.setCursor(col, 1);
-    lcd.cursor();
-  } else {
-    lcd.noCursor();
-  }
-}
-
-void handleTimerRunning() {
-  if(millis() >= timerEndMillis){
-    analogWrite(ledPin, 0);
-    currentMode = MANUAL;
-    lastDisplayBrightness = -1;
-  } else {
-    remainingSeconds = (timerEndMillis - millis())/1000;
-    analogWrite(ledPin, 255);
-  }
-}
-
-void updateLCD() {
-  switch(currentMode){
-    case MANUAL:
-      {
-        int bright = map(analogRead(potPin), 0, 1023, 0, 100);
-        if(bright != lastDisplayBrightness) {
-          lastDisplayBrightness = bright;
-          lcd.setCursor(0, 0);
-          lcd.print("Manual Mode     ");
-          lcd.setCursor(0, 1);
-          lcd.print("Bright: ");
-          lcd.print(bright);
-          lcd.print("%     ");
+// Timer1 Interrupt (100ms interval)
+void __interrupt() isr(void) {
+    if (TMR1IF) {
+        TMR1H = 0x0B; TMR1L = 0xDC; // Reload for 100ms
+        
+        if (pwr_status && timer_minutes > 0) {
+            seconds_counter++;
+            if (seconds_counter >= 600) { // 60 seconds (1 minute)
+                timer_minutes--;
+                seconds_counter = 0;
+                if (timer_minutes == 0) {
+                    pwr_status = 0; // အချိန်ပြည့်လျှင် ပိတ်မည်
+                }
+            }
         }
-      }
-      break;
-      
-    case TIMER_SETUP:
-      lcd.setCursor(0, 0);
-      lcd.print("Set Timer HH:MM ");
-      lcd.setCursor(0, 1);
-      char buf[6];
-      sprintf(buf, "%02d:%02d", setHours, setMinutes);
-      lcd.print(buf);
-      lcd.print("    ");
-      break;
-      
-    case TIMER_RUNNING:
-      lcd.setCursor(0, 0);
-      lcd.print("Timer Running   ");
-      lcd.setCursor(0, 1);
-      int hrs = remainingSeconds/3600;
-      int mins = (remainingSeconds%3600)/60;
-      int secs = remainingSeconds%60;
-      char timeBuf[9];
-      sprintf(timeBuf, "%02d:%02d:%02d", hrs, mins, secs);
-      lcd.print("Left: ");
-      lcd.print(timeBuf);
-      lcd.print("     ");
-      break;
-  }
+        TMR1IF = 0;
+    }
+}
+
+void main(void) {
+    setup();
+    
+    while(1) {
+        // 1. Power On/Off Logic
+        if (BTN_POWER == 0) {
+            __delay_ms(40);
+            if (BTN_POWER == 0) {
+                pwr_status = !pwr_status;
+                if (pwr_status) {
+                    dim_level = 0;       
+                    timer_minutes = 0;   // အစပိုင်းတွင် Timer မသုံးသေးပါ (--:-- ပြရန်)
+                }
+                while(!BTN_POWER) display_process();
+            }
+        }
+
+        if (pwr_status) {
+            // 2. Dimming Logic
+            if (BTN_DIM == 0) {
+                __delay_ms(40);
+                if (BTN_DIM == 0) {
+                    dim_level++;
+                    if (dim_level > 2) dim_level = 0;
+                    while(!BTN_DIM) display_process();
+                }
+            }
+
+            // 3. Timer Up Button Logic
+            if (BTN_UP == 0) {
+                __delay_ms(40);
+                if (timer_minutes < 180) timer_minutes += 5;
+                seconds_counter = 0;
+                while(!BTN_UP) display_process();
+            }
+
+            // 4. Timer Down Button Logic
+            if (BTN_DOWN == 0) {
+                __delay_ms(40);
+                if (timer_minutes >= 5) timer_minutes -= 5;
+                while(!BTN_DOWN) display_process();
+            }
+            
+            update_system_outputs(); 
+        } else {
+            CCPR1L = 0;
+            PORTC &= 0x07; 
+        }
+
+        display_process(); 
+    }
+}
+
+void setup(void) {
+    ANSEL = 0; ANSELH = 0; // All Digital I/O
+    
+    TRISA = 0x0F; // RA0-RA3 Inputs, RA4-RA5 Outputs (Digit Control pins)
+    TRISB = 0x00; // PORTB Outputs (7-Segment Data lines A-G)
+    TRISC = 0x00; // PORTC Outputs (RC0, RC1 = Digits / RC2 = PWM / RC3,4,5 = Indicators)
+    
+    PORTB = 0x00;
+    
+    // ကနဦးအခြေအနေတွင် Digit Control အားလုံးကို HIGH ပေးပြီး Display ခေတ္တပိတ်ထားမည်
+    PORTA |= 0x30; // RA4, RA5 = 1
+    PORTC |= 0x03; // RC0, RC1 = 1
+    
+    // PWM Config
+    T2CON = 0x04;  
+    PR2 = 255;     
+    CCP1CON = 0x0C;
+    
+    // Timer1 Config (100ms)
+    T1CON = 0x11;  
+    TMR1H = 0x0B;  
+    TMR1L = 0xDC;
+    TMR1IE = 1; GIE = 1; PEIE = 1;
+}
+
+void update_system_outputs(void) {
+    PORTC &= 0x07; 
+    if (dim_level == 0) { 
+        CCPR1L = 50;        
+        PORTC |= 0x08;      
+    } else if (dim_level == 1) { 
+        CCPR1L = 150;       
+        PORTC |= 0x10;      
+    } else { 
+        CCPR1L = 255;       
+        PORTC |= 0x20;      
+    }
+}
+
+// 5463AS-1 Hardware Internal Wiring အတွက် Logic အမှန် ပြင်ဆင်ထားသော စနစ်
+void display_process(void) {
+    if (!pwr_status) {
+        PORTB = 0x00;
+        PORTA |= 0x30; 
+        PORTC |= 0x03; 
+        return;
+    }
+
+    int hrs = timer_minutes / 60;
+    int mins = timer_minutes % 60;
+    int digits[4] = {hrs/10, hrs%10, mins/10, mins%10};
+
+    for(int i=0; i<4; i++) {
+        // All Digits OFF 
+        PORTA |= 0x30; 
+        PORTC |= 0x03; 
+
+        // Segment Data Output 
+        if (timer_minutes == 0) {
+            PORTB = 0x40; // Dash '-' ပြမည်
+        } else {
+            PORTB = segment_code[digits[i]]; 
+        }
+        
+        // 5463AS-1 display ၏ ခြေထောက်များနှင့် ကိုက်ညီအောင် လှည့်ပတ်မောင်းနှင်ခြင်း
+        // i=0 (Digit 1), i=1 (Digit 2), i=2 (Digit 3), i=3 (Digit 4)
+        if(i == 0)      RC0 = 0; // PIC Pin RC0 -> ချိတ်ရမည်မှာ Display Pin 12 (Digit 1)
+        else if(i == 1) RC1 = 0; // PIC Pin RC1 -> ချိတ်ရမည်မှာ Display Pin 9  (Digit 2)
+        else if(i == 2) RA4 = 0; // PIC Pin RA4 -> ချိတ်ရမည်မှာ Display Pin 8  (Digit 3)
+        else            RA5 = 0; // PIC Pin RA5 -> ချိတ်ရမည်မှာ Display Pin 6  (Digit 4)
+        
+        __delay_ms(1); 
+    }
 }
