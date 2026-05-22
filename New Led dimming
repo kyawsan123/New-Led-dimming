@@ -162,13 +162,13 @@ void update_system_outputs(void) {
     PORTC &= 0x07; // မီးဆိုင်းလိုင်းဟောင်းများ ရှင်းလင်းခြင်း
     
     if (dim_level == 0) { 
-        CCPR1L = 50;        // Low Level (Duty Cycle နည်းနည်းဖြင့် မှိန်မှိန်လင်းမည်)
+        CCPR1L = 40;        // Low Level (Duty Cycle နည်းနည်းဖြင့် မှိန်မှိန်လင်းမည်)
         PORTC |= 0x08;      // Low Level ပြမည့် အချက်ပြ LED မီး (RC3) ကို ဖွင့်ခြင်း
     } else if (dim_level == 1) { 
-        CCPR1L = 150;       // Medium Level
+        CCPR1L = 80;       // Medium Level
         PORTC |= 0x10;      // Medium Level ပြမည့် အချက်ပြ LED မီး (RC4) ကို ဖွင့်ခြင်း
     } else { 
-        CCPR1L = 255;       // High Level (အလင်းဆုံး)
+        CCPR1L = 200;       // High Level (အလင်းဆုံး)
         PORTC |= 0x20;      // High Level ပြမည့် အချက်ပြ LED မီး (RC5) ကို ဖွင့်ခြင်း
     }
 }
